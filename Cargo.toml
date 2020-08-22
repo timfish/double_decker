@@ -1,0 +1,13 @@
+[package]
+name = "double_decker"
+version = "0.0.1"
+authors = ["Tim Fish <tim@timfish.uk>"]
+edition = "2018"
+license = "MIT"
+description = "A simple unbounded Multi-Producer Multi-Subscriber event bus built with crossbeam channelss"
+readme = "README.md"
+repository = "https://github.com/timfish/double_decker"
+
+[dependencies]
+parking_lot = "0.11"
+crossbeam = "0.7"
