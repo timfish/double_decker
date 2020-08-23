@@ -44,7 +44,6 @@ fn it_iterates() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn aggressive_iteration() {
     for _ in 0..1_000 {
         use std::thread;

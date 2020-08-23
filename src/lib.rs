@@ -9,21 +9,24 @@ carry more passengers than a regular bus 🤷‍♂️.
 
 Unlike `bus::Bus`, `double_decker::Bus` implements a cheap `Clone()` which I've found useful.
 
-You should probably just use the [`bus`](https://crates.io/crates/bus) crate because it's mature and
-completely lock-free.
+## It sounds like double-decker buses are better than regular buses. Does this imply that `double_decker::Bus` is better than `bus::Bus`?
+
+No.
+
+The [`bus`](https://crates.io/crates/bus) crate is mature and completely lock-free. This implementation is neither!
 
 # Design
 `T` must implement `Clone` so it can be passed to all consumers.
 
-When you call `add_rx()`, a `Sender<T>`/`Receiver<T>` pair are created and the `Sender` is
+When you call `add_rx()`, a `Sender`/`Receiver` pair are created and the `Sender` is
 stored in a `HashMap` behind a `RwLock`.
 
 `broadcast()` uses shared read access of the `RwLock` and sends out events to each `Receiver` in the
 order they were added.
 
 Lock contention can only occur when the number of subscribers changes as this requires write access to
-the `RwLock`. This occurs when you call `add_rx()` or when you call `broadcast()` and one of more
-of the `Sender`s returns `SendError` because it's disconnected.
+the `RwLock`. This occurs when you call `add_rx()` or when you call `broadcast()` and one or more
+`Sender` returns `SendError` because it's become disconnected.
 
 # Examples plagiarised from `bus` crate
 
@@ -77,7 +80,7 @@ events with a closure that is called on every broadcast. `subscribe` is blocking
 when this is dropped.
 
 ```rust
-use double_decker::{Bus, SubscribeOnThread};
+use double_decker::{Bus, SubscribeToReader};
 
 let bus = Bus::<i32>::new();
 
@@ -173,7 +176,7 @@ impl<T: Clone> Bus<T> {
     pub fn broadcast(&self, event: T) {
         let disconnected = { self.inner.read().broadcast(event) };
 
-        if disconnected.len() > 0 {
+        if !disconnected.is_empty() {
             self.inner.write().remove_senders(&disconnected);
         }
     }
@@ -208,13 +211,13 @@ impl Drop for Subscription {
     }
 }
 
-pub trait SubscribeOnThread<T: Send + 'static> {
+pub trait SubscribeToReader<T: Send + 'static> {
     #[must_use]
     fn subscribe_on_thread(&self, callback: BoxedFn<T>) -> Subscription;
     fn subscribe(&self, callback: BoxedFn<T>);
 }
 
-impl<T: Send + 'static> SubscribeOnThread<T> for Receiver<T> {
+impl<T: Send + 'static> SubscribeToReader<T> for Receiver<T> {
     #[must_use]
     fn subscribe_on_thread(&self, mut callback: BoxedFn<T>) -> Subscription {
         let (terminate_tx, terminate_rx) = bounded::<()>(0);
@@ -244,7 +247,7 @@ impl<T: Send + 'static> SubscribeOnThread<T> for Receiver<T> {
     }
 }
 
-impl<T: Clone + Send + 'static> SubscribeOnThread<T> for Bus<T> {
+impl<T: Clone + Send + 'static> SubscribeToReader<T> for Bus<T> {
     #[must_use]
     fn subscribe_on_thread(&self, callback: BoxedFn<T>) -> Subscription {
         self.add_rx().subscribe_on_thread(callback)
