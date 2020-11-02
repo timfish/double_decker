@@ -97,9 +97,13 @@ bus.broadcast(5);
 ```
 */
 
-use crossbeam::{bounded, unbounded, Receiver, Sender, TryRecvError};
-use parking_lot::RwLock;
-use std::{collections::HashMap, sync::Arc, thread};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+    thread,
+};
+
+use crossbeam::channel::{bounded, unbounded, Receiver, Sender, TryRecvError};
 
 struct BusInner<T: Clone> {
     senders: HashMap<usize, Sender<T>>,
@@ -169,15 +173,23 @@ impl<T: Clone> Bus<T> {
 
     /// Adds a new `Receiver<T>`
     pub fn add_rx(&self) -> Receiver<T> {
-        self.inner.write().add_rx()
+        self.inner.write().expect("Lock was poisoned").add_rx()
     }
 
     /// Broadcast to all `Receiver`s
     pub fn broadcast(&self, event: T) {
-        let disconnected = { self.inner.read().broadcast(event) };
+        let disconnected = {
+            self.inner
+                .read()
+                .expect("Lock was poisoned")
+                .broadcast(event)
+        };
 
         if !disconnected.is_empty() {
-            self.inner.write().remove_senders(&disconnected);
+            self.inner
+                .write()
+                .expect("Lock was poisoned")
+                .remove_senders(&disconnected);
         }
     }
 }
@@ -190,24 +202,32 @@ impl<T: Clone> Default for Bus<T> {
 
 type BoxedFn<T> = Box<dyn FnMut(T) + Send>;
 
+struct DropSignal {
+    tx_signal: Sender<()>,
+}
+
+impl DropSignal {
+    pub fn new(tx_signal: Sender<()>) -> Arc<Self> {
+        Arc::new(DropSignal { tx_signal })
+    }
+}
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        let _ = self.tx_signal.send(());
+    }
+}
+
 #[derive(Clone)]
 pub struct Subscription {
-    terminate: Sender<()>,
+    terminate: Arc<DropSignal>,
 }
 
 impl Subscription {
     pub fn new(terminate: Sender<()>) -> Self {
-        Subscription { terminate }
-    }
-
-    pub fn dispose(&self) {
-        let _ = self.terminate.send(());
-    }
-}
-
-impl Drop for Subscription {
-    fn drop(&mut self) {
-        self.dispose();
+        Subscription {
+            terminate: DropSignal::new(terminate),
+        }
     }
 }
 
@@ -261,7 +281,7 @@ impl<T: Clone + Send + 'static> SubscribeToReader<T> for Bus<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam::RecvTimeoutError;
+    use crossbeam::channel::RecvTimeoutError;
     use std::time::Duration;
 
     #[derive(Clone, PartialEq, Debug)]
@@ -307,6 +327,41 @@ mod tests {
             }
 
             // _sub is dropped here
+        }
+
+        dispatcher.broadcast(Event::Start);
+
+        match rx_test.recv_timeout(Duration::from_millis(100)) {
+            Err(RecvTimeoutError::Disconnected) => {}
+            _ => panic!("Subscription has been dropped so we should not get any events"),
+        }
+    }
+
+    #[test]
+    fn clone_subscription_without_dropping() {
+        let dispatcher = Bus::<Event>::new();
+
+        let (tx_test, rx_test) = unbounded::<Event>();
+
+        {
+            let sub = dispatcher.subscribe_on_thread(Box::new(move |event| {
+                tx_test.send(event).unwrap();
+            }));
+
+            {
+                #[allow(clippy::redundant_clone)]
+                let _sub_clone = sub.clone();
+                // _sub_clone is dropped here
+            }
+
+            dispatcher.broadcast(Event::Start);
+
+            match rx_test.recv_timeout(Duration::from_millis(100)) {
+                Err(_) => panic!("Event not received"),
+                Ok(e) => assert_eq!(e, Event::Start),
+            }
+
+            // sub is dropped here
         }
 
         dispatcher.broadcast(Event::Start);

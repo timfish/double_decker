@@ -1,4 +1,4 @@
-use crossbeam::TryRecvError;
+use crossbeam::channel::TryRecvError;
 
 // These tests were plagiarised from the bus crate!
 
@@ -20,7 +20,6 @@ fn it_fails_when_empty() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn it_iterates() {
     use std::thread;
 
@@ -103,7 +102,6 @@ fn it_handles_leaves() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn it_runs_blocked_reads() {
     use std::thread;
 
